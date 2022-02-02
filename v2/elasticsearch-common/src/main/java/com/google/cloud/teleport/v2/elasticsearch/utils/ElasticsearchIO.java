@@ -162,8 +162,10 @@ public class ElasticsearchIO {
   private static final Logger LOG = LoggerFactory.getLogger(ElasticsearchIO.class);
 
   public static Read read() {
-    // default scrollKeepalive = 5m as a majorant for un-predictable time between 2 start/read calls
-    // default batchSize to 100 as recommended by ES dev team as a safe value when dealing
+    // default scrollKeepalive = 5m as a majorant for un-predictable time between 2
+    // start/read calls
+    // default batchSize to 100 as recommended by ES dev team as a safe value when
+    // dealing
     // with big documents and still a good compromise for performances
     return new AutoValue_ElasticsearchIO_Read.Builder()
         .setWithMetadata(false)
@@ -207,12 +209,16 @@ public class ElasticsearchIO {
         if (partialUpdate) {
           errorRootName = "update";
         } else {
-          if (backendVersion == 2) {
-            errorRootName = "create";
-          } else if (backendVersion >= 5) {
-            errorRootName = "index";
+          // look for error object key dynamically
+          for (String name : new String[] {"create", "index"}) {
+            JsonNode root = item.path(name);
+            if (root != null && !root.isMissingNode()) {
+              errorRootName = name;
+              break;
+            }
           }
         }
+
         JsonNode errorRoot = item.path(errorRootName);
         JsonNode error = errorRoot.get("error");
         if (error != null) {
@@ -550,8 +556,8 @@ public class ElasticsearchIO {
     /**
      * Provide a query used while reading from Elasticsearch.
      *
-     * @param query the query. See <a
-     *     href="https://www.elastic.co/guide/en/elasticsearch/reference/2.4/query-dsl.html">Query
+     * @param query the query. See <a href=
+     *     "https://www.elastic.co/guide/en/elasticsearch/reference/2.4/query-dsl.html">Query
      *     DSL</a>
      * @return a {@link PTransform} reading data from Elasticsearch.
      */
@@ -565,8 +571,8 @@ public class ElasticsearchIO {
      * Provide a {@link ValueProvider} that provides the query used while reading from
      * Elasticsearch. This is useful for cases when the query must be dynamic.
      *
-     * @param query the query. See <a
-     *     href="https://www.elastic.co/guide/en/elasticsearch/reference/2.4/query-dsl.html">Query
+     * @param query the query. See <a href=
+     *     "https://www.elastic.co/guide/en/elasticsearch/reference/2.4/query-dsl.html">Query
      *     DSL</a>
      * @return a {@link PTransform} reading data from Elasticsearch.
      */
@@ -585,8 +591,8 @@ public class ElasticsearchIO {
     }
 
     /**
-     * Provide a scroll keepalive. See <a
-     * href="https://www.elastic.co/guide/en/elasticsearch/reference/2.4/search-request-scroll.html">scroll
+     * Provide a scroll keepalive. See <a href=
+     * "https://www.elastic.co/guide/en/elasticsearch/reference/2.4/search-request-scroll.html">scroll
      * API</a> Default is "5m". Change this only if you get "No search context found" errors.
      *
      * @param scrollKeepalive keepalive duration of the scroll
@@ -599,8 +605,8 @@ public class ElasticsearchIO {
     }
 
     /**
-     * Provide a size for the scroll read. See <a
-     * href="https://www.elastic.co/guide/en/elasticsearch/reference/2.4/search-request-scroll.html">
+     * Provide a size for the scroll read. See <a href=
+     * "https://www.elastic.co/guide/en/elasticsearch/reference/2.4/search-request-scroll.html">
      * scroll API</a> Default is 100. Maximum is 10 000. If documents are small, increasing batch
      * size might improve read performance. If documents are big, you might need to decrease
      * batchSize
@@ -685,7 +691,8 @@ public class ElasticsearchIO {
       List<BoundedElasticsearchSource> sources = new ArrayList<>();
       if (backendVersion == 2) {
         // 1. We split per shard :
-        // unfortunately, Elasticsearch 2.x doesn't provide a way to do parallel reads on a single
+        // unfortunately, Elasticsearch 2.x doesn't provide a way to do parallel reads
+        // on a single
         // shard.So we do not use desiredBundleSize because we cannot split shards.
         // With the slice API in ES 5.x+ we will be able to use desiredBundleSize.
         // Basically we will just ask the slice API to return data
@@ -708,7 +715,8 @@ public class ElasticsearchIO {
         long indexSize = getEstimatedSizeBytes(options);
         float nbBundlesFloat = (float) indexSize / desiredBundleSizeBytes;
         int nbBundles = (int) Math.ceil(nbBundlesFloat);
-        // ES slice api imposes that the number of slices is <= 1024 even if it can be overloaded
+        // ES slice api imposes that the number of slices is <= 1024 even if it can be
+        // overloaded
         if (nbBundles > 1024) {
           nbBundles = 1024;
         }
@@ -752,10 +760,16 @@ public class ElasticsearchIO {
         return estimatedByteSize;
       }
 
-      String endPoint =
-          String.format(
-              "/%s/%s/_count",
-              connectionConfiguration.getIndex(), connectionConfiguration.getType());
+      String endPoint;
+      if (backendVersion < 7) {
+        endPoint =
+            String.format(
+                "/%s/%s/_count",
+                connectionConfiguration.getIndex(), connectionConfiguration.getType());
+      } else {
+        endPoint = String.format("/%s/_count", connectionConfiguration.getIndex());
+      }
+
       try (RestClient restClient = connectionConfiguration.createClient()) {
         long count = queryCount(restClient, endPoint, query);
         LOG.debug("estimate source byte size: query document count " + count);
@@ -784,7 +798,8 @@ public class ElasticsearchIO {
         throws IOException {
       // we use indices stats API to estimate size and list the shards
       // (https://www.elastic.co/guide/en/elasticsearch/reference/2.4/indices-stats.html)
-      // as Elasticsearch 2.x doesn't not support any way to do parallel read inside a shard
+      // as Elasticsearch 2.x doesn't not support any way to do parallel read inside a
+      // shard
       // the estimated size bytes is not really used in the split into bundles.
       // However, we implement this method anyway as the runners can use it.
       // NB: Elasticsearch 5.x+ now provides the slice API.
@@ -862,11 +877,17 @@ public class ElasticsearchIO {
             String.format("\"slice\": {\"id\": %s,\"max\": %s}", source.sliceId, source.numSlices);
         query = query.replaceFirst("\\{", "{" + sliceQuery + ",");
       }
-      String endPoint =
-          String.format(
-              "/%s/%s/_search",
-              source.spec.getConnectionConfiguration().getIndex(),
-              source.spec.getConnectionConfiguration().getType());
+      String endPoint;
+      if (source.backendVersion < 7) {
+        endPoint =
+            String.format(
+                "/%s/%s/_search",
+                source.spec.getConnectionConfiguration().getIndex(),
+                source.spec.getConnectionConfiguration().getType());
+      } else {
+        endPoint =
+            String.format("/%s/_search", source.spec.getConnectionConfiguration().getIndex());
+      }
       Map<String, String> params = new HashMap<>();
       params.put("scroll", source.spec.getScrollKeepalive());
       if (source.backendVersion == 2) {
@@ -964,6 +985,7 @@ public class ElasticsearchIO {
       return source;
     }
   }
+
   /**
    * A POJO encapsulating a configuration for retry behavior when issuing requests to ES. A retry
    * will be attempted until the maxAttempts or maxDuration is exceeded, whichever comes first, for
@@ -1202,8 +1224,8 @@ public class ElasticsearchIO {
      * Provide a function to extract the target type from the document allowing for dynamic document
      * routing. Should the function throw an Exception then the batch will fail and the exception
      * propagated. Users are encouraged to consider carefully if multipe types are a sensible model
-     * <a
-     * href="https://www.elastic.co/blog/index-type-parent-child-join-now-future-in-elasticsearch">as
+     * <a href=
+     * "https://www.elastic.co/blog/index-type-parent-child-join-now-future-in-elasticsearch">as
      * discussed in this blog</a>.
      *
      * @param typeFn to extract the destination index from
@@ -1303,7 +1325,8 @@ public class ElasticsearchIO {
       private ArrayList<String> batch;
       private long currentBatchSizeBytes;
 
-      // Encapsulates the elements which form the metadata for an Elasticsearch bulk operation
+      // Encapsulates the elements which form the metadata for an Elasticsearch bulk
+      // operation
       private static class DocumentMetadata implements Serializable {
         final String index;
         final String type;
@@ -1339,10 +1362,12 @@ public class ElasticsearchIO {
                   .withMaxRetries(spec.getRetryConfiguration().getMaxAttempts() - 1)
                   .withMaxCumulativeBackoff(spec.getRetryConfiguration().getMaxDuration());
         }
-        // configure a custom serializer for metadata to be able to change serialization based
+        // configure a custom serializer for metadata to be able to change serialization
+        // based
         // on ES version
         SimpleModule module = new SimpleModule();
-        module.addSerializer(DocumentMetadata.class, new DocumentMetadataSerializer());
+        module.addSerializer(
+            DocumentMetadata.class, new DocumentMetadataSerializer((backendVersion >= 7)));
         OBJECT_MAPPER.registerModule(module);
       }
 
@@ -1353,9 +1378,11 @@ public class ElasticsearchIO {
       }
 
       private class DocumentMetadataSerializer extends StdSerializer<DocumentMetadata> {
+        private boolean excludeType = false;
 
-        private DocumentMetadataSerializer() {
+        private DocumentMetadataSerializer(boolean excludeType) {
           super(DocumentMetadata.class);
+          this.excludeType = excludeType;
         }
 
         @Override
@@ -1366,7 +1393,7 @@ public class ElasticsearchIO {
           if (value.index != null) {
             gen.writeStringField("_index", value.index);
           }
-          if (value.type != null) {
+          if (value.type != null && !this.excludeType) {
             gen.writeStringField("_type", value.type);
           }
           if (value.id != null) {
@@ -1381,6 +1408,7 @@ public class ElasticsearchIO {
           gen.writeEndObject();
         }
       }
+
       /**
        * Extracts the components that comprise the document address from the document using the
        * {@link FieldValueExtractFn} configured. This allows any or all of the index, type and
@@ -1425,7 +1453,8 @@ public class ElasticsearchIO {
           // delete request used for deleting a document.
           batch.add(String.format("{ \"delete\" : %s }%n", documentMetadata));
         } else {
-          // index is an insert/upsert and update is a partial update (or insert if not existing)
+          // index is an insert/upsert and update is a partial update (or insert if not
+          // existing)
           if (spec.getUsePartialUpdate()) {
             batch.add(
                 String.format(
@@ -1461,14 +1490,20 @@ public class ElasticsearchIO {
         currentBatchSizeBytes = 0;
         Response response;
         HttpEntity responseEntity;
-        // Elasticsearch will default to the index/type provided here if none are set in the
+        // Elasticsearch will default to the index/type provided here if none are set in
+        // the
         // document meta (i.e. using ElasticsearchIO$Write#withIndexFn and
         // ElasticsearchIO$Write#withTypeFn options)
-        String endPoint =
-            String.format(
-                "/%s/%s/_bulk",
-                spec.getConnectionConfiguration().getIndex(),
-                spec.getConnectionConfiguration().getType());
+        String endPoint;
+        if (backendVersion < 7) {
+          endPoint =
+              String.format(
+                  "/%s/%s/_bulk",
+                  spec.getConnectionConfiguration().getIndex(),
+                  spec.getConnectionConfiguration().getType());
+        } else {
+          endPoint = String.format("/%s/_bulk", spec.getConnectionConfiguration().getIndex());
+        }
         HttpEntity requestBody =
             new NStringEntity(bulkRequest.toString(), ContentType.APPLICATION_JSON);
         Request request = new Request("POST", endPoint);
